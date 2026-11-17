@@ -1,0 +1,192 @@
+{
+  "name": "LendLoop - Request notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-request",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "webhookId": "lendloop-request"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.LENDLOOP_HMAC_SECRET;\nif (!secret) throw new Error('LENDLOOP_HMAC_SECRET is not set in the n8n environment');\nconst sign = (ts, body) => crypto.createHmac('sha256', secret).update(ts + '.' + body).digest('hex');\n\nconst MAX_SKEW = 300;\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst ts = headers['x-lendloop-timestamp'];\nconst sig = headers['x-lendloop-signature'];\nconst raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\n\nconst fresh = ts && Math.abs(Date.now() / 1000 - Number(ts)) <= MAX_SKEW;\nlet valid = false;\nif (fresh && sig) {\n  const expected = sign(ts, raw);\n  const a = Buffer.from(expected), b = Buffer.from(String(sig).toLowerCase());\n  valid = a.length === b.length && crypto.timingSafeEqual(a, b);\n}\nif (!valid) return [{ json: { proceed: false, status: 401 } }];\n\nconst payload = JSON.parse(raw);\n// Idempotency: Convex retries with the same eventId. Remember recent ids and no-op on repeats.\nconst store = $getWorkflowStaticData('global');\nstore.seen = store.seen || [];\nif (store.seen.includes(payload.eventId)) return [{ json: { proceed: false, status: 200, duplicate: true } }];\nstore.seen.push(payload.eventId);\nif (store.seen.length > 500) store.seen.shift();\nreturn [{ json: { proceed: true, status: 200, payload } }];\n"
+      },
+      "name": "Verify HMAC + dedupe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.proceed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "name": "Proceed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json.payload;\n// Only the fields needed to notify one person.\nconst texts = {\n  request_created: `${p.actorName} wants to borrow your \"${p.toolName}\" from ${p.startDate} to ${p.endDate}.`,\n  approved: `${p.actorName} approved your request for \"${p.toolName}\" (${p.startDate} to ${p.endDate}).`,\n  declined: `${p.actorName} declined your request for \"${p.toolName}\".`,\n  returned: `\"${p.toolName}\" was marked as returned. Thanks for lending and borrowing!`,\n  cancelled: `${p.actorName} cancelled their request for \"${p.toolName}\".`,\n};\nreturn [{ json: {\n  to: p.recipientEmail,\n  subject: `LendLoop: ${p.event.replace('_', ' ')} - ${p.toolName}`,\n  text: `Hi ${p.recipientName},\\n\\n${texts[p.event] || 'Your request was updated.'}`,\n  eventId: p.eventId,\n} }];\n"
+      },
+      "name": "Build message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mock delivery: logged to the n8n execution log. To send real email, replace this node with an\n// \"Email Send\" (SMTP) node using an n8n SMTP credential and map to/subject/text from the previous node.\nconsole.log('[LendLoop notification]', JSON.stringify({ eventId: $json.eventId, to: $json.to, subject: $json.subject }));\nreturn [{ json: { delivered: true, eventId: $json.eventId } }];\n"
+      },
+      "name": "Send notification (mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        120
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: $json.status === 200 } }}",
+        "options": {
+          "responseCode": "={{ $json.status }}"
+        }
+      },
+      "name": "Respond (401 or duplicate)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify HMAC + dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify HMAC + dedupe": {
+      "main": [
+        [
+          {
+            "node": "Proceed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Proceed?": {
+      "main": [
+        [
+          {
+            "node": "Build message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond (401 or duplicate)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build message": {
+      "main": [
+        [
+          {
+            "node": "Send notification (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send notification (mock)": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "tags": []
+}
