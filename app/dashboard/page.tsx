@@ -213,4 +213,4 @@ function Admin() {
       <RequestList rows={loans} mode="all" />
     </>
   );
-  }
+}
