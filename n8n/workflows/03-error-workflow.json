@@ -1,0 +1,89 @@
+{
+  "name": "LendLoop - Error workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.LENDLOOP_HMAC_SECRET;\nif (!secret) throw new Error('LENDLOOP_HMAC_SECRET is not set in the n8n environment');\nconst sign = (ts, body) => crypto.createHmac('sha256', secret).update(ts + '.' + body).digest('hex');\nconst e = $json;\nconst workflow = (e.workflow && e.workflow.name) || 'unknown';\nconst message = (e.execution && e.execution.error && e.execution.error.message) || 'unknown error';\nconsole.error('[LendLoop automation failure]', workflow, message);\nconst body = JSON.stringify({ workflow, message: message.slice(0, 180) });\nconst ts = String(Math.floor(Date.now() / 1000));\nreturn [{ json: { body, ts, sig: sign(ts, body) } }];\n"
+      },
+      "name": "Format + sign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/automation-failure",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{ $json.sig }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "name": "Report to Convex activity log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format + sign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format + sign": {
+      "main": [
+        [
+          {
+            "node": "Report to Convex activity log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "tags": []
+}
