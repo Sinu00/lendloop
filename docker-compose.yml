@@ -1,0 +1,20 @@
+# Self-hosted n8n for LendLoop. Usage: copy .env.example to .env, fill values, then `docker compose up -d`.
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"   # bound to localhost only
+    environment:
+      - GENERIC_TIMEZONE=UTC
+      - TZ=UTC
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}        # encrypts credentials stored by n8n
+      - WEBHOOK_URL=${N8N_PUBLIC_URL:-http://localhost:5678/}
+      # Code nodes need crypto for HMAC and read the shared secret from the environment (never from JSON).
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - LENDLOOP_HMAC_SECRET=${LENDLOOP_HMAC_SECRET}
+      - CONVEX_SITE_URL=${CONVEX_SITE_URL}
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro   # for `n8n import:workflow --separate --input=/workflows`
