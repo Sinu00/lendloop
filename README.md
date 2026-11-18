@@ -120,3 +120,11 @@ Nothing secret is committed. `.env.example` has placeholders only, and the expor
 - Reminders and notifications are logged mocks until an SMTP credential is wired in.
 - Dates are plain `YYYY-MM-DD` in UTC.
 - Realtime updates come from Convex subscriptions; there is no offline mode.
+
+## Tested vs untested
+
+- Tested against live Clerk and Convex dev instances (Playwright, 20 checks): sign-up and sign-in, public list, lend, borrow, approve, return, admin tab, activity log, and server-side RBAC rejections with real JWTs.
+- Unit tests (17), `tsc` and `next build` pass.
+- NOT tested: the n8n workflows. The build sandbox had no Docker, so the workflow JSON in `n8n/workflows/` was never imported into a running n8n. Expect to fix small import issues.
+- Uses `@clerk/nextjs` 7, which replaces `SignedIn`/`SignedOut` with `<Show when="signed-in|signed-out">`.
+- For headless testing on a Clerk dev instance, turn off "Challenge suspicious sign-ups" and use `+clerk_test@example.com` emails (code 424242). Turn it back on afterwards.
