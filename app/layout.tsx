@@ -16,15 +16,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <body>
           <ConvexClientProvider>
             <header className="top">
-              <Link href="/" className="brand">LendLoop</Link>
+              <Link href="/" className="brand"><span className="logo">⟳</span>LendLoop</Link>
               <Show when="signed-in">
-                <nav style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                <nav className="nav">
                   <Link href="/dashboard">Dashboard</Link>
                   <UserButton />
                 </nav>
               </Show>
             </header>
             <main>{children}</main>
+            <p className="foot">LendLoop · neighborhood tool lending</p>
           </ConvexClientProvider>
         </body>
       </html>
