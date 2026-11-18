@@ -3,10 +3,19 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { useConvexAuth } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import Icon from "@/components/Icon";
 import type { Id } from "@/convex/_generated/dataModel";
 
 const CATEGORIES = ["power tools", "garden", "kitchen", "camping", "other"] as const;
 type Category = (typeof CATEGORIES)[number];
+const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "?";
+const statusTone = (st: string) => ({ pending: "warn", approved: "blue", returned: "", declined: "bad", cancelled: "gray", available: "", on_loan: "warn" } as Record<string, string>)[st] ?? "gray";
+function Empty({ icon, title, text }: { icon: string; title: string; text: string }) {
+  return <div className="empty"><div className="big"><Icon name={icon} size={34} /></div><h3>{title}</h3><p>{text}</p></div>;
+}
+function Skeletons() {
+  return <div className="grid"><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /></div>;
+}
 type Tab = "browse" | "listings" | "requests" | "incoming" | "admin";
 
 function useAction<A extends unknown[]>(fn: (...a: A) => Promise<unknown>) {
@@ -35,16 +44,32 @@ export default function Dashboard() {
     if (isAuthenticated) void ensure();
   }, [isAuthenticated, ensure]);
 
-  if (isLoading || !isAuthenticated || !me) return <p className="muted">Loading your account…</p>;
-  const tabs: [Tab, string][] = [["browse", "Browse tools"], ["listings", "My listings"], ["requests", "My requests"], ["incoming", "Incoming requests"]];
-  if (me.role === "admin") tabs.push(["admin", "Admin"]);
+  const mine = useQuery(api.tools.mine, isAuthenticated && me ? {} : "skip");
+  const incoming = useQuery(api.requests.incoming, isAuthenticated && me ? {} : "skip");
+  const myReqs = useQuery(api.requests.myRequests, isAuthenticated && me ? {} : "skip");
+  if (isLoading || !isAuthenticated || !me) return <Skeletons />;
+  const pendingIn = incoming?.filter((r) => r.status === "pending").length ?? 0;
+  const out = myReqs?.filter((r) => r.status === "approved").length ?? 0;
+  const lent = incoming?.filter((r) => r.status === "approved").length ?? 0;
+  const tabs: [Tab, string, number][] = [["browse", "Browse tools", 0], ["listings", "My listings", 0], ["requests", "My requests", 0], ["incoming", "Incoming requests", pendingIn]];
+  if (me.role === "admin") tabs.push(["admin", "Admin", 0]);
 
   return (
     <>
-      <h2>Hi {me.name} {me.role === "admin" && <span className="tag">admin</span>} {me.trustedLender && <span className="tag">trusted lender</span>}</h2>
+      <div className="greet">
+        <h2>Hi {me.name}</h2>
+        {me.role === "admin" && <span className="tag blue">admin</span>}
+        {me.trustedLender && <span className="tag">trusted lender</span>}
+      </div>
+      <div className="stats">
+        <div className="stat"><div className="v">{mine?.length ?? "–"}</div><div className="l">Tools you&apos;ve listed</div></div>
+        <div className={pendingIn ? "stat alert" : "stat"}><div className="v">{pendingIn}</div><div className="l">Requests waiting for you</div></div>
+        <div className="stat"><div className="v">{lent}</div><div className="l">Tools out on loan</div></div>
+        <div className="stat"><div className="v">{out}</div><div className="l">Tools you&apos;re borrowing</div></div>
+      </div>
       <div className="tabs">
-        {tabs.map(([k, label]) => (
-          <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{label}</button>
+        {tabs.map(([k, label, n]) => (
+          <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{label}{n > 0 && <span className="count">{n}</span>}</button>
         ))}
       </div>
       {tab === "browse" && <Browse isAdmin={me.role === "admin"} />}
@@ -56,6 +81,14 @@ export default function Dashboard() {
   );
 }
 
+function ago(ts: number) {
+  const d = Math.floor((Date.now() - ts) / 86400000);
+  if (d >= 1) return `${d} day${d > 1 ? "s" : ""} ago`;
+  const h = Math.floor((Date.now() - ts) / 3600000);
+  return h >= 1 ? `${h}h ago` : "just now";
+}
+const fmt = (d: string) => new Date(d + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const label = (st: string) => (st === "on_loan" ? "on loan" : st);
 function Browse({ isAdmin }: { isAdmin: boolean }) {
   const [category, setCategory] = useState<Category | "">("");
   const tools = useQuery(api.tools.listAll, category ? { category } : {});
@@ -69,28 +102,40 @@ function Browse({ isAdmin }: { isAdmin: boolean }) {
 
   return (
     <>
-      <select value={category} onChange={(e) => setCategory(e.target.value as Category | "")} style={{ maxWidth: 220, marginBottom: 12 }}>
-        <option value="">All categories</option>
-        {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
-      </select>
+      <div className="filters">
+        <select aria-label="Category" value={category} onChange={(e) => setCategory(e.target.value as Category | "")} style={{ maxWidth: 220 }}>
+          <option value="">All categories</option>
+          {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+        </select>
+        <span className="muted" style={{ alignSelf: "center" }}>{tools ? `${tools.length} tool${tools.length === 1 ? "" : "s"}` : ""}</span>
+      </div>
       {rq.error && <p className="err">{rq.error}</p>}
       {rm.error && <p className="err">{rm.error}</p>}
+      {tools === undefined && <Skeletons />}
       <div className="grid">
         {tools?.map((t) => (
           <div className="card" key={t._id}>
-            <h3>{t.name}</h3>
-            <span className="tag">{t.category}</span>
-            <span className={t.status === "available" ? "tag" : "tag warn"}>{t.status === "available" ? "available" : "on loan"}</span>
-            <p className="muted">{t.condition} · {t.description}</p>
-            <p className="muted">Lender: {t.ownerName}{t.ownerTrusted ? " ✓ trusted" : ""}</p>
+            <div className="top">
+              <span className="ico"><Icon name={t.category} /></span>
+              <div>
+                <h3>{t.name}</h3>
+                <div className="tags">
+                  <span className="tag">{t.category}</span>
+                  <span className={t.status === "available" ? "tag" : "tag warn"}>{t.status === "available" ? "available" : "on loan"}</span>
+                </div>
+              </div>
+            </div>
+            <p className="muted">{t.condition}{t.description ? ` · ${t.description}` : ""}</p>
+            <div className="who"><span className="avatar">{initials(t.ownerName)}</span>Lender: {t.ownerName}{t.ownerTrusted ? " ✓ trusted" : ""}</div>
             <div className="actions">
               {!t.isMine && t.status === "available" && <button className="ghost" onClick={() => setOpen(open === t._id ? null : t._id)}>Request</button>}
+              {t.isMine && <span className="tag gray">your listing</span>}
               {isAdmin && <button className="danger" onClick={() => rm.run(t._id)}>Remove (admin)</button>}
             </div>
             {open === t._id && (
-              <div style={{ marginTop: 8 }}>
-                <input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
-                <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} style={{ marginTop: 6 }} />
+              <div style={{ display: "grid", gap: 8, marginTop: 4 }}>
+                <label className="f">From<input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></label>
+                <label className="f">Until<input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></label>
                 <div className="actions">
                   <button disabled={!start || !end} onClick={async () => { if (await rq.run(t._id)) setOpen(null); }}>Send request</button>
                 </div>
@@ -99,7 +144,7 @@ function Browse({ isAdmin }: { isAdmin: boolean }) {
           </div>
         ))}
       </div>
-      {tools?.length === 0 && <p className="muted">No tools in this category.</p>}
+      {tools?.length === 0 && <Empty icon="search" title="No tools here yet" text={category ? "Nothing in this category. Try another one, or list something yourself." : "Nobody has listed a tool yet. Add yours from My listings."} />}
     </>
   );
 }
@@ -113,37 +158,39 @@ function Listings() {
   const r = useAction(async (toolId: Id<"tools">) => remove({ toolId }));
   return (
     <>
-      <form className="row" onSubmit={async (e) => { e.preventDefault(); if (await c.run()) setF({ ...f, name: "", description: "" }); }}>
-        <input required placeholder="Tool name" maxLength={80} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
-        <select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value as Category })}>
-          {CATEGORIES.map((x) => <option key={x}>{x}</option>)}
-        </select>
-        <input required placeholder="Condition" maxLength={60} value={f.condition} onChange={(e) => setF({ ...f, condition: e.target.value })} />
-        <input placeholder="Short description" maxLength={300} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
-        <button type="submit">List tool</button>
-      </form>
+      <div className="panel">
+        <h3>List a tool</h3>
+        <form className="row" onSubmit={async (e) => { e.preventDefault(); if (await c.run()) setF({ ...f, name: "", description: "" }); }}>
+          <input required placeholder="Tool name" aria-label="Tool name" maxLength={80} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+          <select aria-label="Category" value={f.category} onChange={(e) => setF({ ...f, category: e.target.value as Category })}>
+            {CATEGORIES.map((x) => <option key={x}>{x}</option>)}
+          </select>
+          <input required placeholder="Condition" aria-label="Condition" maxLength={60} value={f.condition} onChange={(e) => setF({ ...f, condition: e.target.value })} />
+          <input placeholder="Short description" aria-label="Short description" maxLength={300} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+          <button type="submit">List tool</button>
+        </form>
+      </div>
       {c.error && <p className="err">{c.error}</p>}
       {r.error && <p className="err">{r.error}</p>}
+      {tools === undefined && <Skeletons />}
       <div className="grid">
         {tools?.map((t) => (
           <div className="card" key={t._id}>
-            <h3>{t.name}</h3>
-            <span className="tag">{t.category}</span><span className="tag">{t.status}</span>
-            <p className="muted">{t.condition} · {t.description}</p>
+            <div className="top">
+              <span className="ico"><Icon name={t.category} /></span>
+              <div>
+                <h3>{t.name}</h3>
+                <div className="tags"><span className="tag">{t.category}</span><span className={`tag ${statusTone(t.status)}`}>{label(t.status)}</span></div>
+              </div>
+            </div>
+            <p className="muted">{t.condition}{t.description ? ` · ${t.description}` : ""}</p>
             <div className="actions"><button className="danger" onClick={() => r.run(t._id)}>Delete</button></div>
           </div>
         ))}
       </div>
-      {tools?.length === 0 && <p className="muted">You have not listed anything yet.</p>}
+      {tools?.length === 0 && <Empty icon="other" title="You have not listed anything yet" text="Add a drill, a ladder, a tent. Anything you rarely use is a good start." />}
     </>
   );
-}
-
-function ago(ts: number) {
-  const d = Math.floor((Date.now() - ts) / 86400000);
-  if (d >= 1) return `${d} day${d > 1 ? "s" : ""} ago`;
-  const h = Math.floor((Date.now() - ts) / 3600000);
-  return h >= 1 ? `${h}h ago` : "just now";
 }
 
 function Requests({ mode }: { mode: "mine" | "incoming" }) {
@@ -166,13 +213,20 @@ function RequestList({ rows, mode }: { rows: Row[] | undefined; mode: "mine" | "
   return (
     <>
       {a.error && <p className="err">{a.error}</p>}
+      {rows === undefined && <Skeletons />}
       <div className="grid">
         {rows?.map((r) => (
           <div className="card" key={r._id}>
-            <h3>{r.toolName}</h3>
-            <span className="tag">{r.status}</span>
-            <p className="muted">{r.startDate} → {r.endDate}</p>
-            <p className="muted">Borrower: {r.borrowerName} · Lender: {r.lenderName}</p>
+            <div className="top">
+              <span className="ico"><Icon name="calendar" /></span>
+              <div>
+                <h3>{r.toolName}</h3>
+                <div className="tags"><span className={`tag ${statusTone(r.status)}`}>{r.status}</span></div>
+              </div>
+            </div>
+            <p className="muted"><b>{fmt(r.startDate)}</b> → <b>{fmt(r.endDate)}</b></p>
+            <div className="who"><span className="avatar">{initials(r.borrowerName)}</span>Borrower: {r.borrowerName}</div>
+            <div className="who"><span className="avatar">{initials(r.lenderName)}</span>Lender: {r.lenderName}</div>
             <div className="actions">
               {mode === "incoming" && r.status === "pending" && (<><button onClick={() => a.run("approve", r._id)}>Approve</button><button className="ghost" onClick={() => a.run("decline", r._id)}>Decline</button></>)}
               {mode === "incoming" && r.status === "approved" && <button onClick={() => a.run("returned", r._id)}>Mark returned</button>}
@@ -184,7 +238,11 @@ function RequestList({ rows, mode }: { rows: Row[] | undefined; mode: "mine" | "
           </div>
         ))}
       </div>
-      {rows?.length === 0 && <p className="muted">Nothing here yet.</p>}
+      {rows?.length === 0 && (mode === "incoming"
+        ? <Empty icon="inbox" title="No requests yet" text="When a neighbor asks to borrow one of your tools, it shows up here for you to approve." />
+        : mode === "mine"
+        ? <Empty icon="handshake" title="You haven't requested anything" text="Browse tools and ask to borrow one for the dates you need." />
+        : <Empty icon="list" title="No loans yet" text="Loans from every user will appear here." />)}
     </>
   );
 }
@@ -196,21 +254,26 @@ function Admin() {
   const t = useAction(async (userId: Id<"users">, trusted: boolean) => setTrusted({ userId, trusted }));
   return (
     <>
-      <h3>Lenders</h3>
+      <div className="section-head"><h2>Lenders</h2></div>
       {t.error && <p className="err">{t.error}</p>}
       <div className="grid">
         {users?.map((u) => (
           <div className="card" key={u._id}>
-            <h3>{u.name}</h3>
-            <span className="tag">{u.role}</span>{u.trustedLender && <span className="tag">trusted lender</span>}
+            <div className="top">
+              <span className="avatar" style={{ width: 42, height: 42, fontSize: 15 }}>{initials(u.name)}</span>
+              <div>
+                <h3>{u.name}</h3>
+                <div className="tags"><span className={u.role === "admin" ? "tag blue" : "tag gray"}>{u.role}</span>{u.trustedLender && <span className="tag">trusted lender</span>}</div>
+              </div>
+            </div>
             <div className="actions">
               <button className="ghost" onClick={() => t.run(u._id, !u.trustedLender)}>{u.trustedLender ? "Remove trusted" : "Mark trusted lender"}</button>
             </div>
           </div>
         ))}
       </div>
-      <h3>All loans</h3>
+      <div className="section-head" style={{ marginTop: 28 }}><h2>All loans</h2></div>
       <RequestList rows={loans} mode="all" />
     </>
   );
-}
+    }
