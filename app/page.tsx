@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useQuery } from "convex/react";
-import { SignInButton, SignedIn, SignedOut } from "@clerk/nextjs";
+import { SignInButton, Show } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 
 export default function Home() {
@@ -12,14 +12,14 @@ export default function Home() {
       <section className="hero">
         <h1>LendLoop</h1>
         <p>Borrow what you need. Lend what you don&apos;t.</p>
-        <SignedOut>
+        <Show when="signed-out">
           <SignInButton mode="modal">
             <button>Sign in to lend or borrow</button>
           </SignInButton>
-        </SignedOut>
-        <SignedIn>
+        </Show>
+        <Show when="signed-in">
           <Link className="btn" href="/dashboard">Go to your dashboard</Link>
-        </SignedIn>
+        </Show>
       </section>
       <h2>Available tools</h2>
       {tools === undefined && <p className="muted">Loading…</p>}
