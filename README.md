@@ -128,3 +128,7 @@ Nothing secret is committed. `.env.example` has placeholders only, and the expor
 - NOT tested: the n8n workflows. The build sandbox had no Docker, so the workflow JSON in `n8n/workflows/` was never imported into a running n8n. Expect to fix small import issues.
 - Uses `@clerk/nextjs` 7, which replaces `SignedIn`/`SignedOut` with `<Show when="signed-in|signed-out">`.
 - For headless testing on a Clerk dev instance, turn off "Challenge suspicious sign-ups" and use `+clerk_test@example.com` emails (code 424242). Turn it back on afterwards.
+
+## Demo data
+
+`npx convex run seed:reset` wipes all tables and inserts 4 placeholder lenders, 10 tools and one active loan. Seed lenders cannot sign in. After you sign in for the first time, make yourself admin with `npx convex run users:promoteToAdmin '{"email":"you@example.com"}'`. The Playwright run in testing creates throwaway users and tools, so reseed after running it.
