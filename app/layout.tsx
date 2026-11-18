@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ClerkProvider, SignedIn, UserButton } from "@clerk/nextjs";
+import { ClerkProvider, Show, UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
 import "./globals.css";
@@ -17,12 +17,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <ConvexClientProvider>
             <header className="top">
               <Link href="/" className="brand">LendLoop</Link>
-              <SignedIn>
+              <Show when="signed-in">
                 <nav style={{ display: "flex", gap: 16, alignItems: "center" }}>
                   <Link href="/dashboard">Dashboard</Link>
                   <UserButton />
                 </nav>
-              </SignedIn>
+              </Show>
             </header>
             <main>{children}</main>
           </ConvexClientProvider>
