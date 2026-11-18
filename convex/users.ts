@@ -13,7 +13,7 @@ export const ensure = mutation({
       .query("users")
       .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
       .unique();
-    const name = clean(identity.name ?? identity.nickname ?? "Neighbor", 80);
+    const name = clean(identity.name || identity.nickname || (identity.email ? identity.email.split("@")[0].split("+")[0] : "") || "Neighbor", 80);
     const email = identity.email ?? "";
     if (existing) {
       if (existing.name !== name || existing.email !== email) await ctx.db.patch(existing._id, { name, email });
