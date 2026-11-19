@@ -1,4 +1,5 @@
 {
+  "id": "LendLoopRemind01",
   "name": "LendLoop - Overdue reminders (daily)",
   "nodes": [
     {
@@ -18,6 +19,16 @@
       "position": [
         0,
         200
+      ]
+    },
+    {
+      "parameters": {},
+      "name": "Run now (manual)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        380
       ]
     },
     {
@@ -137,6 +148,17 @@
         ]
       ]
     },
+    "Run now (manual)": {
+      "main": [
+        [
+          {
+            "node": "Sign GET",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Sign GET": {
       "main": [
         [
@@ -184,7 +206,7 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": ""
+    "errorWorkflow": "LendLoopErrorWf1"
   },
   "active": false,
   "tags": []

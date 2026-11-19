@@ -16,6 +16,11 @@ def node(name, type_, params, pos, version=1, **extra):
     n.update(extra)
     return n
 
+# Fixed workflow IDs: lets workflows 1 and 2 point at the error workflow straight from the export.
+NOTIFY_WF_ID = "LendLoopNotify01"
+REMIND_WF_ID = "LendLoopRemind01"
+ERROR_WF_ID = "LendLoopErrorWf1"
+
 RETRY = {"retryOnFail": True, "maxTries": 3, "waitBetweenTries": 2000}
 
 def conn(*pairs):
@@ -46,12 +51,10 @@ if (fresh && sig) {
 if (!valid) return [{ json: { proceed: false, status: 401 } }];
 
 const payload = JSON.parse(raw);
-// Idempotency: Convex retries with the same eventId. Remember recent ids and no-op on repeats.
+// Idempotency: Convex retries with the same eventId. Only events that were actually delivered are
+// remembered (see "Mark delivered"), so a retry after a failed send is sent again, not dropped.
 const store = $getWorkflowStaticData('global');
-store.seen = store.seen || [];
-if (store.seen.includes(payload.eventId)) return [{ json: { proceed: false, status: 200, duplicate: true } }];
-store.seen.push(payload.eventId);
-if (store.seen.length > 500) store.seen.shift();
+if ((store.seen || []).includes(payload.eventId)) return [{ json: { proceed: false, status: 200, duplicate: true } }];
 return [{ json: { proceed: true, status: 200, payload } }];
 """
 
@@ -72,6 +75,15 @@ return [{ json: {
 } }];
 """
 
+mark_js = """// Runs only after the send succeeded. Remember the eventId so Convex retries of this event are no-ops.
+const store = $getWorkflowStaticData('global');
+store.seen = store.seen || [];
+const id = $('Build message').first().json.eventId;
+if (!store.seen.includes(id)) store.seen.push(id);
+if (store.seen.length > 500) store.seen.shift();
+return [{ json: { ok: true } }];
+"""
+
 send_js = """// Mock delivery: logged to the n8n execution log. To send real email, replace this node with an
 // "Email Send" (SMTP) node using an n8n SMTP credential and map to/subject/text from the previous node.
 console.log('[LendLoop notification]', JSON.stringify({ eventId: $json.eventId, to: $json.to, subject: $json.subject }));
@@ -79,6 +91,7 @@ return [{ json: { delivered: true, eventId: $json.eventId } }];
 """
 
 wf1 = {
+    "id": NOTIFY_WF_ID,
     "name": "LendLoop - Request notification",
     "nodes": [
         node("Webhook", "n8n-nodes-base.webhook",
@@ -92,8 +105,9 @@ wf1 = {
                              "combinator": "and"}}, [440, 200], 2),
         node("Build message", "n8n-nodes-base.code", {"jsCode": build_js}, [660, 120], 2),
         node("Send notification (mock)", "n8n-nodes-base.code", {"jsCode": send_js}, [880, 120], 2, **RETRY),
+        node("Mark delivered", "n8n-nodes-base.code", {"jsCode": mark_js}, [1100, 120], 2),
         node("Respond 200", "n8n-nodes-base.respondToWebhook",
-             {"respondWith": "json", "responseBody": "={{ { ok: true } }}", "options": {"responseCode": 200}}, [1100, 120], 1.1),
+             {"respondWith": "json", "responseBody": "={{ { ok: true } }}", "options": {"responseCode": 200}}, [1320, 120], 1.1),
         node("Respond (401 or duplicate)", "n8n-nodes-base.respondToWebhook",
              {"respondWith": "json", "responseBody": "={{ { ok: $json.status === 200 } }}",
               "options": {"responseCode": "={{ $json.status }}"}}, [660, 300], 1.1),
@@ -101,8 +115,9 @@ wf1 = {
     "connections": conn(
         ("Webhook", "Verify HMAC + dedupe", 0), ("Verify HMAC + dedupe", "Proceed?", 0),
         ("Proceed?", "Build message", 0), ("Proceed?", "Respond (401 or duplicate)", 1),
-        ("Build message", "Send notification (mock)", 0), ("Send notification (mock)", "Respond 200", 0)),
-    "settings": {"executionOrder": "v1"},
+        ("Build message", "Send notification (mock)", 0), ("Send notification (mock)", "Mark delivered", 0),
+        ("Mark delivered", "Respond 200", 0)),
+    "settings": {"executionOrder": "v1", "errorWorkflow": ERROR_WF_ID},
     "active": False,
     "tags": [],
 }
@@ -128,10 +143,13 @@ http_headers = lambda: {"parameters": [
     {"name": "x-lendloop-signature", "value": "={{ $json.sig }}"}]}
 
 wf2 = {
+    "id": REMIND_WF_ID,
     "name": "LendLoop - Overdue reminders (daily)",
     "nodes": [
         node("Daily 09:00", "n8n-nodes-base.scheduleTrigger",
              {"rule": {"interval": [{"field": "days", "triggerAtHour": 9}]}}, [0, 200], 1.2),
+        # Same flow on demand: "Execute workflow" in the editor, or `n8n execute --id=LendLoopRemind01`.
+        node("Run now (manual)", "n8n-nodes-base.manualTrigger", {}, [0, 380], 1),
         node("Sign GET", "n8n-nodes-base.code", {"jsCode": sign_get_js}, [220, 200], 2),
         node("Fetch overdue loans", "n8n-nodes-base.httpRequest",
              {"method": "GET", "url": "={{ $env.CONVEX_SITE_URL }}/n8n/overdue", "sendHeaders": True,
@@ -145,11 +163,11 @@ wf2 = {
               "options": {"timeout": 15000}}, [1100, 200], 4.2, **RETRY),
     ],
     "connections": conn(
-        ("Daily 09:00", "Sign GET", 0), ("Sign GET", "Fetch overdue loans", 0),
+        ("Daily 09:00", "Sign GET", 0), ("Run now (manual)", "Sign GET", 0), ("Sign GET", "Fetch overdue loans", 0),
         ("Fetch overdue loans", "One item per overdue loan", 0),
         ("One item per overdue loan", "Send reminder + sign write-back", 0),
         ("Send reminder + sign write-back", "Write back (idempotent)", 0)),
-    "settings": {"executionOrder": "v1", "errorWorkflow": ""},
+    "settings": {"executionOrder": "v1", "errorWorkflow": ERROR_WF_ID},
     "active": False,
     "tags": [],
 }
@@ -164,6 +182,7 @@ const ts = String(Math.floor(Date.now() / 1000));
 return [{ json: { body, ts, sig: sign(ts, body) } }];
 """
 wf3 = {
+    "id": ERROR_WF_ID,
     "name": "LendLoop - Error workflow",
     "nodes": [
         node("Error Trigger", "n8n-nodes-base.errorTrigger", {}, [0, 200], 1),

@@ -1,4 +1,5 @@
 {
+  "id": "LendLoopNotify01",
   "name": "LendLoop - Request notification",
   "nodes": [
     {
@@ -21,7 +22,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const crypto = require('crypto');\nconst secret = $env.LENDLOOP_HMAC_SECRET;\nif (!secret) throw new Error('LENDLOOP_HMAC_SECRET is not set in the n8n environment');\nconst sign = (ts, body) => crypto.createHmac('sha256', secret).update(ts + '.' + body).digest('hex');\n\nconst MAX_SKEW = 300;\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst ts = headers['x-lendloop-timestamp'];\nconst sig = headers['x-lendloop-signature'];\nconst raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\n\nconst fresh = ts && Math.abs(Date.now() / 1000 - Number(ts)) <= MAX_SKEW;\nlet valid = false;\nif (fresh && sig) {\n  const expected = sign(ts, raw);\n  const a = Buffer.from(expected), b = Buffer.from(String(sig).toLowerCase());\n  valid = a.length === b.length && crypto.timingSafeEqual(a, b);\n}\nif (!valid) return [{ json: { proceed: false, status: 401 } }];\n\nconst payload = JSON.parse(raw);\n// Idempotency: Convex retries with the same eventId. Remember recent ids and no-op on repeats.\nconst store = $getWorkflowStaticData('global');\nstore.seen = store.seen || [];\nif (store.seen.includes(payload.eventId)) return [{ json: { proceed: false, status: 200, duplicate: true } }];\nstore.seen.push(payload.eventId);\nif (store.seen.length > 500) store.seen.shift();\nreturn [{ json: { proceed: true, status: 200, payload } }];\n"
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.LENDLOOP_HMAC_SECRET;\nif (!secret) throw new Error('LENDLOOP_HMAC_SECRET is not set in the n8n environment');\nconst sign = (ts, body) => crypto.createHmac('sha256', secret).update(ts + '.' + body).digest('hex');\n\nconst MAX_SKEW = 300;\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst ts = headers['x-lendloop-timestamp'];\nconst sig = headers['x-lendloop-signature'];\nconst raw = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\n\nconst fresh = ts && Math.abs(Date.now() / 1000 - Number(ts)) <= MAX_SKEW;\nlet valid = false;\nif (fresh && sig) {\n  const expected = sign(ts, raw);\n  const a = Buffer.from(expected), b = Buffer.from(String(sig).toLowerCase());\n  valid = a.length === b.length && crypto.timingSafeEqual(a, b);\n}\nif (!valid) return [{ json: { proceed: false, status: 401 } }];\n\nconst payload = JSON.parse(raw);\n// Idempotency: Convex retries with the same eventId. Only events that were actually delivered are\n// remembered (see \"Mark delivered\"), so a retry after a failed send is sent again, not dropped.\nconst store = $getWorkflowStaticData('global');\nif ((store.seen || []).includes(payload.eventId)) return [{ json: { proceed: false, status: 200, duplicate: true } }];\nreturn [{ json: { proceed: true, status: 200, payload } }];\n"
       },
       "name": "Verify HMAC + dedupe",
       "type": "n8n-nodes-base.code",
@@ -89,6 +90,18 @@
     },
     {
       "parameters": {
+        "jsCode": "// Runs only after the send succeeded. Remember the eventId so Convex retries of this event are no-ops.\nconst store = $getWorkflowStaticData('global');\nstore.seen = store.seen || [];\nconst id = $('Build message').first().json.eventId;\nif (!store.seen.includes(id)) store.seen.push(id);\nif (store.seen.length > 500) store.seen.shift();\nreturn [{ json: { ok: true } }];\n"
+      },
+      "name": "Mark delivered",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        120
+      ]
+    },
+    {
+      "parameters": {
         "respondWith": "json",
         "responseBody": "={{ { ok: true } }}",
         "options": {
@@ -99,7 +112,7 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        1100,
+        1320,
         120
       ]
     },
@@ -176,6 +189,17 @@
       "main": [
         [
           {
+            "node": "Mark delivered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark delivered": {
+      "main": [
+        [
+          {
             "node": "Respond 200",
             "type": "main",
             "index": 0
@@ -185,7 +209,8 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "LendLoopErrorWf1"
   },
   "active": false,
   "tags": []
