@@ -63,7 +63,9 @@ export default defineSchema({
     ),
     at: v.number(),
     summary: v.string(),
-  }).index("by_request", ["requestId"]),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_type", ["type"]),
 
   // Idempotency ledger for n8n write-backs: one row per (request, day).
   reminders: defineTable({

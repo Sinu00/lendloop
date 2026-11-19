@@ -13,6 +13,18 @@ const statusTone = (st: string) => ({ pending: "warn", approved: "blue", returne
 function Empty({ icon, title, text }: { icon: string; title: string; text: string }) {
   return <div className="empty"><div className="big"><Icon name={icon} size={34} /></div><h3>{title}</h3><p>{text}</p></div>;
 }
+/** Two-step destructive action: the first click asks, the second one acts. No browser dialogs. */
+function ConfirmButton({ label, confirmLabel, onConfirm }: { label: string; confirmLabel: string; onConfirm: () => unknown }) {
+  const [asking, setAsking] = useState(false);
+  if (!asking) return <button className="danger" onClick={() => setAsking(true)}>{label}</button>;
+  return (
+    <>
+      <button className="danger" onClick={async () => { setAsking(false); await onConfirm(); }}>{confirmLabel}</button>
+      <button className="ghost" onClick={() => setAsking(false)}>Keep it</button>
+    </>
+  );
+}
+const todayIso = () => new Date().toISOString().slice(0, 10);
 function Skeletons() {
   return <div className="grid"><div className="skeleton" /><div className="skeleton" /><div className="skeleton" /></div>;
 }
@@ -128,14 +140,18 @@ function Browse({ isAdmin }: { isAdmin: boolean }) {
             <p className="muted">{t.condition}{t.description ? ` · ${t.description}` : ""}</p>
             <div className="who"><span className="avatar">{initials(t.ownerName)}</span>Lender: {t.ownerName}{t.ownerTrusted ? " ✓ trusted" : ""}</div>
             <div className="actions">
-              {!t.isMine && t.status === "available" && <button className="ghost" onClick={() => setOpen(open === t._id ? null : t._id)}>Request</button>}
+              {!t.isMine && t.status === "available" && (
+                <button className="ghost" onClick={() => { setStart(""); setEnd(""); setOpen(open === t._id ? null : t._id); }}>
+                  {open === t._id ? "Close" : "Request"}
+                </button>
+              )}
               {t.isMine && <span className="tag gray">your listing</span>}
-              {isAdmin && <button className="danger" onClick={() => rm.run(t._id)}>Remove (admin)</button>}
+              {isAdmin && <ConfirmButton label="Remove (admin)" confirmLabel="Remove listing" onConfirm={() => rm.run(t._id)} />}
             </div>
             {open === t._id && (
               <div style={{ display: "grid", gap: 8, marginTop: 4 }}>
-                <label className="f">From<input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></label>
-                <label className="f">Until<input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></label>
+                <label className="f">From<input type="date" min={todayIso()} value={start} onChange={(e) => { setStart(e.target.value); if (end && end < e.target.value) setEnd(""); }} /></label>
+                <label className="f">Until<input type="date" min={start || todayIso()} value={end} onChange={(e) => setEnd(e.target.value)} /></label>
                 <div className="actions">
                   <button disabled={!start || !end} onClick={async () => { if (await rq.run(t._id)) setOpen(null); }}>Send request</button>
                 </div>
@@ -156,6 +172,10 @@ function Listings() {
   const [f, setF] = useState({ name: "", category: "power tools" as Category, condition: "Good", description: "" });
   const c = useAction(async () => create(f));
   const r = useAction(async (toolId: Id<"tools">) => remove({ toolId }));
+  const update = useMutation(api.tools.update);
+  type Draft = { toolId: Id<"tools">; name: string; category: Category; condition: string; description: string };
+  const [editing, setEditing] = useState<Draft | null>(null);
+  const u = useAction(async (d: Draft) => update(d));
   return (
     <>
       <div className="panel">
@@ -173,20 +193,53 @@ function Listings() {
       {c.error && <p className="err">{c.error}</p>}
       {r.error && <p className="err">{r.error}</p>}
       {tools === undefined && <Skeletons />}
+      {u.error && <p className="err">{u.error}</p>}
       <div className="grid">
-        {tools?.map((t) => (
-          <div className="card" key={t._id}>
-            <div className="top">
-              <span className="ico"><Icon name={t.category} /></span>
-              <div>
-                <h3>{t.name}</h3>
-                <div className="tags"><span className="tag">{t.category}</span><span className={`tag ${statusTone(t.status)}`}>{label(t.status)}</span></div>
+        {tools?.map((t) =>
+          editing?.toolId === t._id ? (
+            <form
+              className="card"
+              key={t._id}
+              onSubmit={async (e) => { e.preventDefault(); if (await u.run(editing)) setEditing(null); }}
+            >
+              <h3>Edit listing</h3>
+              <label className="f">Name<input required maxLength={80} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></label>
+              <label className="f">Category
+                <select value={editing.category} onChange={(e) => setEditing({ ...editing, category: e.target.value as Category })}>
+                  {CATEGORIES.map((x) => <option key={x}>{x}</option>)}
+                </select>
+              </label>
+              <label className="f">Condition<input required maxLength={60} value={editing.condition} onChange={(e) => setEditing({ ...editing, condition: e.target.value })} /></label>
+              <label className="f">Description<input maxLength={300} value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></label>
+              <div className="actions">
+                <button type="submit">Save changes</button>
+                <button type="button" className="ghost" onClick={() => setEditing(null)}>Cancel</button>
+              </div>
+            </form>
+          ) : (
+            <div className="card" key={t._id}>
+              <div className="top">
+                <span className="ico"><Icon name={t.category} /></span>
+                <div>
+                  <h3>{t.name}</h3>
+                  <div className="tags"><span className="tag">{t.category}</span><span className={`tag ${statusTone(t.status)}`}>{label(t.status)}</span></div>
+                </div>
+              </div>
+              <p className="muted">{t.condition}{t.description ? ` · ${t.description}` : ""}</p>
+              <div className="actions">
+                <button
+                  className="ghost"
+                  onClick={() => setEditing({ toolId: t._id, name: t.name, category: t.category, condition: t.condition, description: t.description })}
+                >
+                  Edit
+                </button>
+                {t.status === "on_loan"
+                  ? <span className="tag gray">on loan: can&apos;t delete</span>
+                  : <ConfirmButton label="Delete" confirmLabel="Delete listing" onConfirm={() => r.run(t._id)} />}
               </div>
             </div>
-            <p className="muted">{t.condition}{t.description ? ` · ${t.description}` : ""}</p>
-            <div className="actions"><button className="danger" onClick={() => r.run(t._id)}>Delete</button></div>
-          </div>
-        ))}
+          ),
+        )}
       </div>
       {tools?.length === 0 && <Empty icon="other" title="You have not listed anything yet" text="Add a drill, a ladder, a tent. Anything you rarely use is a good start." />}
     </>
@@ -252,8 +305,27 @@ function Admin() {
   const loans = useQuery(api.requests.allLoans);
   const setTrusted = useMutation(api.users.setTrustedLender);
   const t = useAction(async (userId: Id<"users">, trusted: boolean) => setTrusted({ userId, trusted }));
+  const issues = useQuery(api.requests.automationIssues);
   return (
     <>
+      <div className="section-head">
+        <h2>Automation health</h2>
+        {issues && <span className="muted">{issues.length ? `${issues.length} recent problem${issues.length === 1 ? "" : "s"}` : "No recent problems"}</span>}
+      </div>
+      <div className="panel">
+        {issues === undefined && <p className="muted">Loading…</p>}
+        {issues?.length === 0 && <p className="muted">No n8n failures or undelivered notifications. Failed runs and notifications appear here.</p>}
+        {issues && issues.length > 0 && (
+          <ul className="log" style={{ borderTop: 0, paddingTop: 0, marginTop: 0 }}>
+            {issues.map((l) => (
+              <li key={l._id}>
+                <span className="tag bad" style={{ marginRight: 8 }}>{l.type === "automation_failure" ? "n8n run failed" : "notification not delivered"}</span>
+                {l.summary} · {ago(l.at)}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       <div className="section-head"><h2>Lenders</h2></div>
       {t.error && <p className="err">{t.error}</p>}
       <div className="grid">

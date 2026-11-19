@@ -150,6 +150,25 @@ export const allLoans = query({
   },
 });
 
+/**
+ * Admin only: recent automation problems, newest first. n8n failures (reported by the error workflow)
+ * are not tied to one loan, so this is where they become visible in the app.
+ */
+export const automationIssues = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const [n8nFailures, notifyFailures] = await Promise.all([
+      ctx.db.query("activityLog").withIndex("by_type", (q) => q.eq("type", "automation_failure")).order("desc").take(20),
+      ctx.db.query("activityLog").withIndex("by_type", (q) => q.eq("type", "notification_failed")).order("desc").take(20),
+    ]);
+    return [...n8nFailures, ...notifyFailures]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 20)
+      .map((l) => ({ _id: l._id, type: l.type, at: l.at, summary: l.summary }));
+  },
+});
+
 // ---- Internal helpers used by notify.ts / http.ts (not callable from clients) ----
 
 export const notificationPayload = internalMutation({
