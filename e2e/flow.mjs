@@ -49,7 +49,7 @@ try {
   // Lender edits a listing
   const drillCard = A.locator(".card", { hasText: `Cordless Drill ${id}` });
   await drillCard.getByRole("button", { name: "Edit" }).click();
-  await A.getByLabel("Description").fill("18V with 2 batteries and a case");
+  await A.getByLabel("Description", { exact: true }).fill("18V with 2 batteries and a case");
   await A.getByRole("button", { name: "Save changes" }).click();
   await A.getByText("18V with 2 batteries and a case", { exact: false }).first().waitFor({ timeout: 15000 }).catch(() => {});
   ok("lender can edit a listing", (await A.innerText("body")).includes("18V with 2 batteries and a case"));
@@ -59,7 +59,8 @@ try {
   await pub.goto(BASE_URL); await pub.waitForTimeout(3000); await shot(pub, "4-public-with-tools");
   const pubText = await pub.innerText("body");
   ok("public page lists tools", pubText.includes(`Cordless Drill ${id}`) && pubText.includes(`Hedge Trimmer ${id}`));
-  ok("public page hides owner/description", !/lender:|18V|Electric|ll-lender/i.test(pubText));
+  // Descriptions and owner names must not leak (seed tool names like "Cordless drill (18V)" are fine).
+  ok("public page hides owner/description", !/2 batteries|Electric, 50cm|Lender:|ll-lender/i.test(pubText));
 
   // Borrower browses, filters, requests
   await B.goto(`${BASE_URL}/dashboard`); await B.waitForTimeout(2500);
@@ -139,6 +140,11 @@ try {
 } catch (e) {
   failed++;
   console.log("ERROR", e.message.split("\n")[0]);
+  let n = 0;
+  for (const c of b.contexts()) for (const pg of c.pages()) {
+    console.log(`  page ${n}: ${pg.url()}`);
+    await pg.screenshot({ path: path.join(SHOTS, `error-page-${n++}.png`), fullPage: true }).catch(() => {});
+  }
 } finally {
   await b.close();
   srv.kill();

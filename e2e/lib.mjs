@@ -13,11 +13,17 @@ mkdirSync(SHOTS, { recursive: true });
 
 /** Starts `next start` (run `npm run build` first) unless BASE_URL points at an app that is already running. */
 export async function startServer() {
-  const up = async () => { try { return (await fetch(BASE_URL)).ok; } catch { return false; } };
-  if (await up()) return { kill() {} };
+  // "up" means LendLoop answers, not just anything on that port.
+  const probe = async () => {
+    try { const r = await fetch(BASE_URL); return r.ok ? ((await r.text()).includes("LendLoop") ? "lendloop" : "other") : "down"; }
+    catch { return "down"; }
+  };
+  const first = await probe();
+  if (first === "lendloop") return { kill() {} };
+  if (first === "other") throw new Error(`${BASE_URL} is serving a different app. Free the port or set BASE_URL=http://localhost:3100`);
   const port = new URL(BASE_URL).port || "3000";
   const p = spawn("npx", ["next", "start", "-p", port], { cwd: ROOT, stdio: "ignore" });
-  for (let i = 0; i < 60 && !(await up()); i++) await new Promise((r) => setTimeout(r, 500));
+  for (let i = 0; i < 60 && (await probe()) !== "lendloop"; i++) await new Promise((r) => setTimeout(r, 500));
   return p;
 }
 
