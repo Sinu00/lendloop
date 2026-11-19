@@ -5,3 +5,4 @@ node_modules
 n8n_data
 *.tsbuildinfo
 next-env.d.ts
+e2e/screenshots

@@ -8,7 +8,9 @@
     "start": "next start",
     "convex:dev": "convex dev",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "check:integration": "node scripts/check-integration.mjs",
+    "test:e2e": "node e2e/flow.mjs"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.10.2",
@@ -21,6 +23,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "playwright-core": "^1.65.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
