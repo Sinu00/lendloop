@@ -27,7 +27,7 @@ export const reset = internalMutation({
     await tool(priya, "Orbital sander", "power tools", "Good", "Comes with 20 sanding sheets.");
     const washer = await tool(tom, "Pressure washer", "power tools", "Good", "Electric, 1800 PSI. Hose included.", "on_loan");
     await tool(tom, "Extension ladder (4m)", "other", "Good", "Aluminium. Needs two people to carry.");
-    await tool(aisha, "Hedge trimmer", "garden", "Good", "Electric, 50cm blade.");
+    const trimmer = await tool(aisha, "Hedge trimmer", "garden", "Good", "Electric, 50cm blade.", "on_loan");
     await tool(aisha, "Lawn aerator", "garden", "Fair", "Manual spike roller.");
     await tool(aisha, "Stand mixer", "kitchen", "Like new", "5L bowl with dough hook and whisk.");
     await tool(luis, "4-person tent", "camping", "Good", "Easy pitch, groundsheet included.");
@@ -38,5 +38,10 @@ export const reset = internalMutation({
     const loan = await ctx.db.insert("borrowRequests", { toolId: washer, borrowerId: priya, lenderId: tom, startDate: iso(-2), endDate: iso(3), status: "approved", reminderCount: 0 });
     await ctx.db.insert("activityLog", { requestId: loan, type: "request_created", at: now - 3 * day, summary: `Request created for ${iso(-2)} to ${iso(3)}` });
     await ctx.db.insert("activityLog", { requestId: loan, type: "status_changed", at: now - 2.5 * day, summary: "Status changed to approved" });
+
+    // An overdue loan, so the daily reminder workflow has something to act on in a demo.
+    const late = await ctx.db.insert("borrowRequests", { toolId: trimmer, borrowerId: luis, lenderId: aisha, startDate: iso(-7), endDate: iso(-2), status: "approved", reminderCount: 0 });
+    await ctx.db.insert("activityLog", { requestId: late, type: "request_created", at: now - 8 * day, summary: `Request created for ${iso(-7)} to ${iso(-2)}` });
+    await ctx.db.insert("activityLog", { requestId: late, type: "status_changed", at: now - 7.5 * day, summary: "Status changed to approved" });
   },
 });
