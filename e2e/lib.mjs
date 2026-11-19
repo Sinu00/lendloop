@@ -41,7 +41,7 @@ export const PW = "Ll-" + crypto.randomBytes(9).toString("hex") + "!Zq9";
  */
 export async function signUp(page, email, tag) {
   await page.goto(BASE_URL);
-  await page.getByRole("button", { name: /sign in to lend/i }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click(); // header button
   await page.getByRole("link", { name: /sign up/i }).or(page.getByText("Sign up", { exact: true })).first().click();
   await page.waitForTimeout(1500);
   await page.getByLabel(/email address/i).fill(email);

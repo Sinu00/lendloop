@@ -33,10 +33,11 @@ try {
 
   // Lender lists two tools
   await A.goto(`${BASE_URL}/dashboard`);
-  await A.getByRole("button", { name: "My listings" }).click();
+  await A.getByRole("button", { name: "Listings", exact: true }).click();
   async function listTool(name, cat, desc) {
+    await A.getByRole("button", { name: "List a tool" }).click();
     await A.getByPlaceholder("Tool name").fill(name);
-    await A.locator("form select").first().selectOption(cat);
+    await A.getByRole("dialog").locator("select").selectOption(cat);
     await A.getByPlaceholder("Short description").fill(desc);
     await A.getByRole("button", { name: "List tool" }).click();
     await A.getByText(name, { exact: true }).first().waitFor({ timeout: 15000 });
@@ -49,9 +50,10 @@ try {
   // Lender edits a listing
   const drillCard = A.locator(".card", { hasText: `Cordless Drill ${id}` });
   await drillCard.getByRole("button", { name: "Edit" }).click();
-  await A.getByLabel("Description", { exact: true }).fill("18V with 2 batteries and a case");
+  await A.getByRole("dialog").getByPlaceholder("Short description").fill("18V with 2 batteries and a case");
   await A.getByRole("button", { name: "Save changes" }).click();
   await A.getByText("18V with 2 batteries and a case", { exact: false }).first().waitFor({ timeout: 15000 }).catch(() => {});
+  await shot(A, "3b-after-edit");
   ok("lender can edit a listing", (await A.innerText("body")).includes("18V with 2 batteries and a case"));
 
   // Public page shows name + category only
@@ -64,25 +66,28 @@ try {
 
   // Borrower browses, filters, requests
   await B.goto(`${BASE_URL}/dashboard`); await B.waitForTimeout(2500);
-  await B.locator("select").first().selectOption("garden"); await B.waitForTimeout(1500); await shot(B, "5-borrower-filter-garden");
+  await B.getByRole("button", { name: "Garden", exact: true }).click(); await B.waitForTimeout(1500); await shot(B, "5-borrower-filter-garden");
   let t = await B.innerText("body");
   ok("category filter works", t.includes(`Hedge Trimmer ${id}`) && !t.includes(`Cordless Drill ${id}`));
-  await B.locator("select").first().selectOption(""); await B.waitForTimeout(1000);
-  const card = B.locator(".card", { hasText: `Cordless Drill ${id}` });
-  await card.getByRole("button", { name: "Request" }).click();
+  await B.getByRole("button", { name: "All", exact: true }).click(); await B.waitForTimeout(1000);
+  await B.getByRole("button", { name: new RegExp(`^Cordless Drill ${id}`) }).click();
+  const sheet = B.getByRole("dialog");
   const d = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
-  await card.locator('input[type="date"]').nth(0).fill(d(1));
-  await card.locator('input[type="date"]').nth(1).fill(d(3));
-  await card.getByRole("button", { name: "Send request" }).click(); await B.waitForTimeout(2000);
-  await B.getByRole("button", { name: "My requests" }).click(); await B.waitForTimeout(2000); await shot(B, "6-borrower-my-requests");
-  ok("borrower sees pending request", (await B.innerText("body")).toLowerCase().includes("pending"));
+  await sheet.locator('input[type="date"]').nth(0).fill(d(1));
+  await sheet.locator('input[type="date"]').nth(1).fill(d(3));
+  await shot(B, "5b-borrower-request-sheet");
+  await sheet.getByRole("button", { name: /Send request/ }).click();
+  await sheet.getByText("Request sent").waitFor({ timeout: 15000 });
+  await B.keyboard.press("Escape");
+  await B.getByRole("button", { name: "Requests", exact: true }).click(); await B.waitForTimeout(2000); await shot(B, "6-borrower-my-requests");
+  ok("borrower sees pending request", /waiting for lender/i.test(await B.innerText("body")));
 
   // Lender approves
-  await A.getByRole("button", { name: "Incoming requests" }).click(); await A.waitForTimeout(2000); await shot(A, "7-lender-incoming");
+  await A.getByRole("button", { name: /Incoming/ }).click(); await A.waitForTimeout(2000); await shot(A, "7-lender-incoming");
   await A.getByRole("button", { name: "Approve" }).click(); await A.waitForTimeout(2500);
-  ok("lender approved", (await A.innerText("body")).includes("approved"));
-  await B.reload(); await B.getByRole("button", { name: "My requests" }).click(); await B.waitForTimeout(2500); await shot(B, "8-borrower-approved");
-  ok("borrower sees approved", (await B.innerText("body")).includes("approved"));
+  ok("lender approved", (await A.getByRole("button", { name: "Mark returned" }).count()) > 0);
+  await B.reload(); await B.getByRole("button", { name: "Requests", exact: true }).click(); await B.waitForTimeout(2500); await shot(B, "8-borrower-approved");
+  ok("borrower sees approved", (await B.locator(".loan .pill-approved").count()) > 0);
 
   // Public page no longer shows the loaned tool
   await pub.reload(); await pub.waitForTimeout(3000); t = await pub.innerText("body");
@@ -90,15 +95,15 @@ try {
   ok("non-admin has no Admin tab", !(await B.getByRole("button", { name: "Admin", exact: true }).count()));
 
   // Mark returned
-  await A.reload(); await A.getByRole("button", { name: "Incoming requests" }).click(); await A.waitForTimeout(2500);
+  await A.reload(); await A.getByRole("button", { name: /Incoming/ }).click(); await A.waitForTimeout(2500);
   await A.getByRole("button", { name: "Mark returned" }).click(); await A.waitForTimeout(2500); await shot(A, "9-lender-returned");
-  ok("marked returned", (await A.innerText("body")).includes("returned"));
+  ok("marked returned", (await A.locator(".loan .pill-returned").count()) > 0 && (await A.getByRole("button", { name: "Mark returned" }).count()) === 0);
 
   // Promote lender to admin (operator action via CLI), check the Admin tab
   execSync(`npx convex run users:promoteToAdmin '{"email":"ll-lender-${id}+clerk_test@example.com"}'`, { cwd: ROOT, stdio: "pipe" });
   await A.reload(); await A.waitForTimeout(3000);
   await A.getByRole("button", { name: "Admin", exact: true }).click(); await A.waitForTimeout(2500); await shot(A, "10-admin");
-  await A.locator(".card", { hasText: "ll-borrower" }).first().getByRole("button", { name: /Mark trusted/ }).click()
+  await A.locator(".person", { hasText: "ll-borrower" }).first().getByRole("button", { name: /Mark trusted/ }).click()
     .catch((e) => console.log("trusted click:", e.message.slice(0, 100)));
   await A.waitForTimeout(2000); await shot(A, "11-admin-trusted");
   const adminText = await A.innerText("body");
@@ -135,8 +140,8 @@ try {
   const M = await mc.newPage();
   await M.goto(BASE_URL); await M.waitForTimeout(3000); await M.screenshot({ path: path.join(SHOTS, "mobile-1-home.png"), fullPage: true });
   await M.goto(`${BASE_URL}/dashboard`); await M.waitForTimeout(3500); await M.screenshot({ path: path.join(SHOTS, "mobile-2-dashboard.png"), fullPage: true });
-  await M.getByRole("button", { name: "My listings" }).click(); await M.waitForTimeout(1500); await M.screenshot({ path: path.join(SHOTS, "mobile-3-listings.png"), fullPage: true });
-  await M.getByRole("button", { name: "Incoming requests" }).click(); await M.waitForTimeout(1500); await M.screenshot({ path: path.join(SHOTS, "mobile-4-incoming.png"), fullPage: true });
+  await M.getByRole("button", { name: "Listings", exact: true }).click(); await M.waitForTimeout(1500); await M.screenshot({ path: path.join(SHOTS, "mobile-3-listings.png"), fullPage: true });
+  await M.getByRole("button", { name: /Incoming/ }).click(); await M.waitForTimeout(1500); await M.screenshot({ path: path.join(SHOTS, "mobile-4-incoming.png"), fullPage: true });
 } catch (e) {
   failed++;
   console.log("ERROR", e.message.split("\n")[0]);
