@@ -33,7 +33,7 @@ Repo layout:
 
 ```
 app/                 Next.js routes (public page, /dashboard)
-components/          Convex + Clerk provider
+components/          ui.tsx (shared UI), dashboard/ (Browse, Listings, Requests, Admin), Convex + Clerk provider
 middleware.ts        Clerk: /dashboard requires a session
 convex/
   schema.ts          users, tools, borrowRequests, activityLog, reminders
