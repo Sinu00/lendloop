@@ -44,13 +44,15 @@ convex/
   lib/hmac.ts        HMAC-SHA256 sign/verify (unit tested)
 n8n/workflows/       exported workflows (no secrets)
 scripts/gen_workflows.py   regenerates the workflow JSON
+scripts/check-integration.mjs   end-to-end Convex <-> n8n checks
+e2e/                 Playwright browser run (npm run test:e2e)
 tests/               RBAC and HMAC unit tests
 docker-compose.yml   self-hosted n8n
 ```
 
 ## Local setup
 
-Prerequisites: Node 20+, Docker, free accounts at [Clerk](https://clerk.com) and [Convex](https://convex.dev).
+Prerequisites: Node 22+ (the Convex CLI requires it), Docker, free accounts at [Clerk](https://clerk.com) and [Convex](https://convex.dev).
 
 1. **Install**: `npm install`
 2. **Clerk**: create an application. Copy the publishable and secret keys into `.env.local` (see `.env.example`). In Clerk, Configure > JWT templates > New template > **Convex** (keep the name `convex`). Copy its **Issuer** URL.
@@ -66,10 +68,21 @@ Prerequisites: Node 20+, Docker, free accounts at [Clerk](https://clerk.com) and
    docker compose up -d
    docker compose exec n8n n8n import:workflow --separate --input=/workflows
    ```
-   Open http://localhost:5678, then set the **Error workflow** of both main workflows to "LendLoop - Error workflow" (Workflow settings), and activate the first two.
+   Publish all three workflows, then restart n8n so they go live:
+   ```
+   docker compose exec n8n n8n publish:workflow --id=LendLoopNotify01
+   docker compose exec n8n n8n publish:workflow --id=LendLoopRemind01
+   docker compose exec n8n n8n publish:workflow --id=LendLoopErrorWf1
+   docker compose restart n8n
+   ```
+   The error workflow is already attached to the other two in the export (fixed workflow IDs), so there is nothing to set by hand. It must be published as well: n8n 2.x will not run an unpublished error workflow. The image is pinned to n8n 2.48.5, the version these workflows were tested on.
 5. **Run the app**: `npm run dev`, open http://localhost:3000.
 6. **First admin**: sign in once, then `npx convex run users:promoteToAdmin '{"email":"you@example.com"}'`. Promotion is an internal function: no client can call it.
-7. **Tests**: `npm test` (RBAC rules and HMAC helpers), `npm run typecheck`.
+7. **Tests**: `npm test` (RBAC rules and HMAC helpers), `npm run typecheck`, and with n8n and Convex running, `LENDLOOP_HMAC_SECRET=... CONVEX_SITE_URL=... npm run check:integration` (end-to-end integration checks, see below).
+
+### Trying the automation without Convex or Clerk accounts
+
+`CONVEX_AGENT_MODE=anonymous npx convex dev` runs a local Convex backend (API on `127.0.0.1:3210`, HTTP actions on `127.0.0.1:3211`) with no login. Because it runs on your machine, no tunnel is needed: set `N8N_WEBHOOK_URL=http://localhost:5678/webhook/lendloop-request` in Convex and `CONVEX_SITE_URL=http://host.docker.internal:3211` for n8n. Convex refuses to deploy without `CLERK_JWT_ISSUER_DOMAIN`, so set any placeholder issuer when you are not testing sign-in. Then `npx convex run seed:reset`, run the reminders workflow with its **Run now** trigger, and run `npm run check:integration`.
 
 ## Environment variables
 
@@ -87,9 +100,9 @@ Nothing secret is committed. `.env.example` has placeholders only, and the expor
 
 ## n8n workflows (`n8n/workflows/`)
 
-1. **Request notification**: Webhook (raw body) > verify HMAC and timestamp > dedupe on `eventId` > build a message from only the needed fields > send (logged mock; swap in an Email Send node with an SMTP credential) > respond 200. Bad signatures get 401 and nothing runs. Convex retries non-2xx responses.
-2. **Overdue reminders**: Schedule (daily 09:00) > signed GET `/n8n/overdue` > one item per overdue loan > reminder > signed POST `/n8n/reminder-sent` with `idempotencyKey = requestId:YYYY-MM-DD`. HTTP nodes retry 3 times.
-3. **Error workflow**: Error Trigger > signed POST `/n8n/automation-failure`, so failed runs appear in the app's activity log instead of failing silently.
+1. **Request notification**: Webhook (raw body) > verify HMAC and timestamp > skip if this `eventId` was already delivered > build a message from only the needed fields > send (logged mock; swap in an Email Send node with an SMTP credential) > mark the `eventId` delivered > respond 200. Bad signatures get 401 and nothing runs. A failed run returns 500, so Convex retries, and because the event is only marked after a successful send, the retry is delivered rather than skipped.
+2. **Overdue reminders**: Schedule (daily 09:00, or the **Run now** manual trigger) > signed GET `/n8n/overdue` > one item per overdue loan > reminder > signed POST `/n8n/reminder-sent` with `idempotencyKey = requestId:YYYY-MM-DD`. HTTP nodes retry 3 times.
+3. **Error workflow**: Error Trigger > signed POST `/n8n/automation-failure`, so failed runs show up in the app under **Admin > Automation health** instead of failing silently.
 
 ## Security and data-minimization decisions
 
@@ -100,7 +113,7 @@ Nothing secret is committed. `.env.example` has placeholders only, and the expor
 - **HMAC both directions.** SHA-256 over `timestamp.rawBody`, constant-time comparison, 5-minute window against replay. Failures return a generic 401.
 - **Minimal payloads to n8n.** Recipient name and email, tool name, actor name, status, dates. Nothing else.
 - **Idempotent write-backs.** A `reminders` ledger keyed by `requestId:date` means a retried POST creates no second reminder or counter bump. Notifications carry a stable `eventId` that n8n dedupes.
-- **Failures are visible.** Convex retries the webhook with exponential backoff (5 attempts) and logs a final failure on the loan. n8n failures go to the error workflow and the activity log.
+- **Failures are visible.** Convex retries the webhook with exponential backoff (5 attempts) and logs a final failure on the loan. n8n failures go through the error workflow to the activity log. Admins see both kinds under **Admin > Automation health**.
 - **Secrets** live in env vars (Convex, container env) and n8n's encrypted credential store (SMTP, when used). None are in code or workflow JSON.
 - **Input handling.** Text is trimmed and length capped, dates validated, categories are a closed union, deleting a tool is a soft delete to keep history.
 - **Healthcare-style consideration (privacy).** For a clinical product I would apply the same pattern: the automation layer receives only the minimum identifiers needed to notify, never clinical content, with an audit trail for every automated action and signed, replay-protected calls between systems.
@@ -113,7 +126,6 @@ Nothing secret is committed. `.env.example` has placeholders only, and the expor
 - Persist the n8n dedupe set in Convex or Redis rather than workflow static data, and add alerting (Sentry or Datadog) on the error workflow.
 - Postgres for n8n, backups, and queue mode for scale. End-to-end tests (Playwright) and CI.
 - A tool image upload, and a reputation signal built on "Trusted Lender".
-- **Backend alternative.** I would seriously consider a Go service on SQLite for a small community tool like this: very low RAM, one static binary, single-file backups, and a trivial deploy. The tradeoffs are real: I would give up Convex's realtime sync and shared TypeScript types, and I would write more plumbing myself (auth middleware, subscriptions, migrations). I'm happy to build it that way if you prefer.
 
 ## Known limitations
 
@@ -123,12 +135,20 @@ Nothing secret is committed. `.env.example` has placeholders only, and the expor
 
 ## Tested vs untested
 
-- Tested against live Clerk and Convex dev instances (Playwright, 20 checks): sign-up and sign-in, public list, lend, borrow, approve, return, admin tab, activity log, and server-side RBAC rejections with real JWTs.
+- **Integration (tested).** The exported workflows were imported into n8n 2.48.5 (Docker, this repo's `docker-compose.yml`) and run against a local Convex backend. Verified:
+  - A real Convex notification is signed, delivered and logged on the loan.
+  - Forged signatures get 401 in both directions, and requests older than 5 minutes are rejected.
+  - When a run fails, n8n returns 500, the error workflow posts the failure to Convex, and it appears under Admin > Automation health.
+  - A retry of a failed event is delivered. A repeat of a delivered event is not sent again.
+  - The reminders workflow finds the overdue seed loan and writes back once. Running it again, or replaying the write-back, adds no second reminder.
+
+  `npm run check:integration` repeats the signature, replay, failure, retry and dedupe checks.
+- **Server-side RBAC (tested).** Admin-only queries were called with a regular user's identity (`npx convex run --identity`) and rejected.
 - Unit tests (17), `tsc` and `next build` pass.
-- NOT tested: the n8n workflows. The build sandbox had no Docker, so the workflow JSON in `n8n/workflows/` was never imported into a running n8n. Expect to fix small import issues.
+- **Browser flows.** `npm run build && npm run test:e2e` (`e2e/flow.mjs`, Playwright) signs up two Clerk test users and runs the whole loop: list, edit, public page privacy, category filter, request, approve, return, admin tab. It then calls Convex directly with their real Clerk JWTs to check that the server rejects what the UI hides (removing or editing someone else's listing, admin queries, approving your own request, duplicate requests). It needs a Clerk dev instance, and it uses your installed Chrome or `CHROME_PATH`. The original 20-check version ran green against Clerk and Convex dev instances. The edit-listing and Automation health checks were added afterwards and have not been run yet.
 - Uses `@clerk/nextjs` 7, which replaces `SignedIn`/`SignedOut` with `<Show when="signed-in|signed-out">`.
 - For headless testing on a Clerk dev instance, turn off "Challenge suspicious sign-ups" and use `+clerk_test@example.com` emails (code 424242). Turn it back on afterwards.
 
 ## Demo data
 
-`npx convex run seed:reset` wipes all tables and inserts 4 placeholder lenders, 10 tools and one active loan. Seed lenders cannot sign in. After you sign in for the first time, make yourself admin with `npx convex run users:promoteToAdmin '{"email":"you@example.com"}'`. The Playwright run in testing creates throwaway users and tools, so reseed after running it.
+`npx convex run seed:reset` wipes all tables and inserts 4 placeholder lenders, 10 tools, one active loan and one overdue loan (so the reminder workflow has something to do). Seed lenders cannot sign in. `npm run test:e2e` creates throwaway users and tools, so reseed after running it. After you sign in for the first time, make yourself admin with `npx convex run users:promoteToAdmin '{"email":"you@example.com"}'`.
