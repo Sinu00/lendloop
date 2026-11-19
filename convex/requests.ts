@@ -109,6 +109,7 @@ async function hydrate(ctx: { db: MutationCtx["db"] }, rows: Array<any>) {
       return {
         _id: r._id,
         toolName: (tool as any)?.name ?? "(removed)",
+        toolCategory: ((tool as any)?.category ?? "other") as string,
         borrowerName: (borrower as any)?.name ?? "Neighbor",
         lenderName: (lender as any)?.name ?? "Neighbor",
         startDate: r.startDate,
